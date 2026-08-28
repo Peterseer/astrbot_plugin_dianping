@@ -1,0 +1,80 @@
+{
+  "cookie": {
+    "description": "大众点评 Cookie",
+    "type": "text",
+    "default": "",
+    "hint": "登录大众点评网页后，从浏览器开发者工具的请求头复制完整 Cookie。请勿公开分享。Cookie 失效或触发验证后需更新。",
+    "obvious_hint": true
+  },
+  "user_agent": {
+    "description": "与 Cookie 对应的浏览器 User-Agent",
+    "type": "string",
+    "default": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36"
+  },
+  "default_city_id": {
+    "description": "无法从地点识别城市时使用的大众点评城市 ID",
+    "type": "int",
+    "default": 1,
+    "hint": "默认 1 为上海；北京 2、广州 4、深圳 7、成都 8、重庆 9、香港 341。完整表见 assets/location.md。"
+  },
+  "max_results": {
+    "description": "每次最多返回餐厅数",
+    "type": "int",
+    "default": 5,
+    "hint": "有效范围 1-10。"
+  },
+  "search_pages": {
+    "description": "每次最多抓取搜索结果页数",
+    "type": "int",
+    "default": 1,
+    "hint": "有效范围 1-3；页数越多越容易触发访问验证，建议保持 1。"
+  },
+  "detail_fetch_limit": {
+    "description": "为补充招牌菜/菜价而访问详情页的候选数量",
+    "type": "int",
+    "default": 3,
+    "hint": "有效范围 0-10；设为 0 只使用搜索页信息，风控风险最低。"
+  },
+  "request_interval_seconds": {
+    "description": "相邻大众点评请求的最小间隔秒数",
+    "type": "float",
+    "default": 2.5,
+    "hint": "代码最低限制为 0.5 秒。建议 2-5 秒，避免高频请求。"
+  },
+  "request_timeout_seconds": {
+    "description": "单次请求超时秒数",
+    "type": "int",
+    "default": 20
+  },
+  "max_retries": {
+    "description": "网络错误自动重试次数",
+    "type": "int",
+    "default": 1,
+    "hint": "访问验证不会自动重试。有效范围 0-3。"
+  },
+  "cache_ttl_seconds": {
+    "description": "相同查询的缓存时间（秒）",
+    "type": "int",
+    "default": 600,
+    "hint": "缓存可减少大众点评访问次数；建议不少于 300 秒。"
+  },
+  "proxy_url": {
+    "description": "HTTP/HTTPS 代理（可选）",
+    "type": "string",
+    "default": "",
+    "hint": "例如 http://127.0.0.1:7890。只使用你有权使用的代理。"
+  },
+  "uuid": {
+    "description": "大众点评 uuid（可选，电话接口使用）",
+    "type": "string",
+    "default": "",
+    "hint": "通常是 Cookie 中 _hc.v 的值。留空时只解析详情页直接展示的电话。"
+  },
+  "tcv": {
+    "description": "大众点评 tcv（可选，电话接口使用）",
+    "type": "string",
+    "default": "",
+    "hint": "从大众点评网页接口请求参数中取得；必须与当前 Cookie 会话匹配。"
+  }
+}
+

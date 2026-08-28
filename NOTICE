@@ -1,0 +1,14 @@
+This plugin is based on ideas and data assets from:
+
+  dianping_spider
+  Copyright (c) Sniper970119 and contributors
+  https://github.com/Sniper970119/dianping_spider
+  Source revision used during development:
+  5d4e0018c2ceb02064f11329bd70b5b49b53259c
+
+The city-id table (assets/location.md) and dynamic-font template map
+(assets/template_map.json) are preserved from that project.  The request and
+parser integration has been rewritten for AstrBot's asynchronous plugin model.
+
+This distribution is licensed under GNU GPL v3.  See LICENSE.
+

@@ -1,0 +1,11 @@
+name: astrbot_plugin_dianping
+display_name: 大众点评餐厅推荐
+short_desc: 让 LLM 按地点、口味、评分与招牌菜推荐大众点评餐厅，并按需查询商户电话。
+desc: |
+  基于 Sniper970119/dianping_spider 的搜索页、详情页与动态字体解码思路，
+  为 AstrBot 提供餐厅推荐和按需电话查询 LLM 工具。支持地址、评分、人均消费、
+  招牌/推荐菜及页面明确列出的菜价；默认不主动查询电话。
+version: 1.0.0
+author: Peterseer
+repo: https://github.com/Peterseer/astrbot_plugin_dianping
+astrbot_version: ">=4.5.0,<5"
