@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import re
+from typing import Any
 from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup, Tag
@@ -24,6 +26,110 @@ def first_text(node: Tag, selectors: tuple[str, ...]) -> str:
             if value:
                 return value
     return ""
+
+
+def first_content(node: Tag, selectors: tuple[str, ...]) -> str:
+    for selector in selectors:
+        found = node.select_one(selector)
+        if found:
+            value = clean_text(str(found.get("content") or found.get("data-address") or ""))
+            if value:
+                return value
+    return ""
+
+
+def _address_from_json(value: Any) -> str:
+    if isinstance(value, dict):
+        address = value.get("streetAddress") or value.get("shopAddress")
+        if isinstance(address, str) and clean_text(address):
+            return clean_text(address)
+        nested = value.get("address")
+        if isinstance(nested, str) and clean_text(nested):
+            return clean_text(nested)
+        if isinstance(nested, dict):
+            found = _address_from_json(nested)
+            if found:
+                return found
+        for child in value.values():
+            found = _address_from_json(child)
+            if found:
+                return found
+    elif isinstance(value, list):
+        for child in value:
+            found = _address_from_json(child)
+            if found:
+                return found
+    return ""
+
+
+def _extract_address(soup: BeautifulSoup, root: Tag, *, allow_global: bool = True) -> str:
+    address = first_text(
+        root,
+        (
+            "[itemprop=street-address]",
+            "[itemprop=streetAddress]",
+            "[itemprop=address]",
+            ".tag-addr .addr",
+            ".address .item",
+            ".shop-address",
+            ".address-info",
+            ".shop-info .address",
+            ".address",
+            "[class*=address]",
+            "[class*=shopAddr]",
+        ),
+    )
+    if address:
+        return re.sub(r"^(?:地址|商户地址)[：:]\s*", "", address).strip()
+
+    address = first_content(
+        root,
+        (
+            "meta[itemprop=streetAddress]",
+            "meta[itemprop=street-address]",
+            "meta[property='business:contact_data:street_address']",
+            "meta[name=address]",
+            "[data-address]",
+        ),
+    )
+    if address:
+        return address
+
+    if not allow_global:
+        return ""
+
+    for script in soup.select("script[type='application/ld+json']"):
+        try:
+            payload = json.loads(script.string or script.get_text() or "")
+        except (json.JSONDecodeError, TypeError):
+            continue
+        address = _address_from_json(payload)
+        if address:
+            return address
+
+    source = str(soup)
+    for pattern in (
+        r'\"(?:streetAddress|shopAddress|addressText)\"\s*:\s*\"((?:\\.|[^\"\\])+)\"',
+        r"(?:地址|商户地址)\s*[：:]\s*([^\n\r<>]{3,160}?)(?=\s*(?:电话|营业时间|环境|交通|优惠|更多信息|$))",
+    ):
+        match = re.search(pattern, source, re.I)
+        if not match:
+            continue
+        candidate = match.group(1)
+        try:
+            candidate = json.loads(f'"{candidate}"')
+        except json.JSONDecodeError:
+            pass
+        candidate = clean_text(BeautifulSoup(candidate, "lxml").get_text(" ", strip=True))
+        if candidate:
+            return candidate
+
+    body_text = clean_text(soup.get_text(" ", strip=True))
+    match = re.search(
+        r"(?:地址|商户地址)\s*[：:]\s*(.{3,160}?)(?=\s+(?:电话|营业时间|环境|交通|优惠|更多信息|查看商户|附近商户)(?:\s|[：:]))",
+        body_text,
+    )
+    return clean_text(match.group(1)) if match else ""
 
 
 def _parse_score(node: Tag) -> float | None:
@@ -106,7 +212,7 @@ def parse_search_page(html: str) -> list[Restaurant]:
                 avg_price=first_text(node, (".mean-price", "[class*=mean-price]", "[class*=avg-price]")),
                 category=tags[0] if tags else "",
                 area=tags[1] if len(tags) > 1 else "",
-                address=first_text(node, (".tag-addr .addr", ".address", "[class*=address]")),
+                address=_extract_address(soup, node, allow_global=False),
                 dishes=_parse_dishes(node),
                 detail_url=urljoin("https://www.dianping.com/", href),
                 source_rank=index,
@@ -121,7 +227,7 @@ def parse_detail_page(html: str, shop_id: str, fallback_name: str = "") -> Resta
     root = soup.select_one(".main") or soup
     name = first_text(root, ("#basic-info .shop-name", "h1.shop-name", "h1")) or fallback_name
     phone = first_text(root, ("#basic-info .tel", ".tel", "[itemprop=telephone]"))
-    address = first_text(root, ("[itemprop=street-address]", "[itemprop=address]", ".address"))
+    address = _extract_address(soup, root)
     return Restaurant(
         shop_id=shop_id,
         name=name,
@@ -133,4 +239,3 @@ def parse_detail_page(html: str, shop_id: str, fallback_name: str = "") -> Resta
         dishes=_parse_dishes(root),
         detail_url=f"https://www.dianping.com/shop/{shop_id}",
     )
-

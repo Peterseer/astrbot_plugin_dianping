@@ -30,9 +30,10 @@ class Restaurant:
     source_rank: int = 0
     rank_score: float = 0.0
 
-    def to_dict(self, *, include_phone: bool = False) -> dict[str, Any]:
+    def to_dict(
+        self, *, include_phone: bool = False, include_shop_id: bool = False
+    ) -> dict[str, Any]:
         data: dict[str, Any] = {
-            "shop_id": self.shop_id,
             "name": self.name,
             "score": self.score,
             "review_count": self.review_count,
@@ -45,7 +46,8 @@ class Restaurant:
         }
         if self.sub_scores:
             data["sub_scores"] = self.sub_scores
+        if include_shop_id:
+            data["shop_id"] = self.shop_id
         if include_phone:
             data["phone"] = self.phone
         return data
-

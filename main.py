@@ -20,7 +20,7 @@ PLUGIN_NAME = "astrbot_plugin_dianping"
     PLUGIN_NAME,
     "Peterseer",
     "通过大众点评搜索附近餐厅，并基于评分、口味、招牌菜和价格提供推荐",
-    "1.0.0",
+    "1.0.1",
     "https://github.com/Peterseer/astrbot_plugin_dianping",
 )
 class DianpingPlugin(Star):
@@ -91,8 +91,7 @@ class DianpingPlugin(Star):
             max_results=self._max_results(max_results),
         )
         detail_limit = max(0, min(self._int_config("detail_fetch_limit", 3), len(items)))
-        if detail_limit:
-            await self.client.enrich_dishes(items, limit=detail_limit)
+        await self.client.enrich_results(items, dish_limit=detail_limit)
         self._remember(event, items)
         return items, resolved_city
 
@@ -113,7 +112,6 @@ class DianpingPlugin(Star):
             lines.extend(
                 [
                     f"{index}. {item.name}",
-                    f"   shop_id: {item.shop_id}",
                     f"   评分: {score}；评论数: {item.review_count or '页面未显示'}；人均: {item.avg_price or '页面未显示'}",
                     f"   类型/商圈: {' / '.join(value for value in (item.category, item.area) if value) or '页面未显示'}",
                     f"   地址: {item.address or '页面未显示'}",
@@ -130,7 +128,8 @@ class DianpingPlugin(Star):
             "请用当前 Persona 的自然中文回答用户，推荐 3-5 家并简要说明匹配理由。"
             "只能使用资料中的事实；不得补写菜价、地址、评分或电话。菜品后括号内才是该菜的独立标价；"
             "“人均”不是菜价。资料缺失时明确说页面未显示。默认不要提供电话；如果用户需要，"
-            "请再调用 get_dianping_restaurant_phone，并传入 shop_id。保留可点击的大众点评链接。\n"
+            "请再调用 get_dianping_restaurant_phone，并传入完整店名 restaurant_name。"
+            "默认回答不得显示或索要内部 shop_id。保留可点击的大众点评链接。\n"
             f"查询城市: {city or '使用插件默认城市 ID'}；地点: {location}；想吃: {cuisine or '不限'}\n\n"
             f"<大众点评餐厅资料>\n{cls._format_items(items)}\n</大众点评餐厅资料>"
         )
@@ -196,16 +195,16 @@ class DianpingPlugin(Star):
         """按需查询刚才推荐的大众点评餐厅公开联系电话。只有用户明确索要电话、联系方式或想致电店铺时使用；不要在普通推荐中主动调用。
 
         Args:
-            shop_id(string): search_dianping_restaurants 返回的店铺 shop_id；能取得时优先填写
-            restaurant_name(string): 用户所指店名；没有 shop_id 时用于匹配本会话最近推荐
+            shop_id(string): 内部店铺 ID；通常留空，仅兼容其他集成直接传入
+            restaurant_name(string): 用户所指的完整店名；用于匹配本会话最近推荐，优先填写
         """
         resolved_id, resolved_name = self._resolve_recent(event, shop_id, restaurant_name)
         if not resolved_id:
             recent = self._recent.get(self._session_key(event), [])
-            choices = "、".join(f"{item.name}（{item.shop_id}）" for item in recent)
+            choices = "、".join(item.name for item in recent)
             if choices:
                 return f"无法唯一确定用户所指店铺。请先让用户确认：{choices}。不要猜测电话。"
-            return "缺少可用的 shop_id，且本会话没有最近推荐记录。请先搜索餐厅，不要猜测电话。"
+            return "本会话没有可匹配的最近推荐记录。请先搜索餐厅，不要猜测电话。"
         try:
             detail = await self.client.get_detail(
                 resolved_id,
@@ -222,7 +221,6 @@ class DianpingPlugin(Star):
             )
         payload = {
             "restaurant": detail.name or resolved_name,
-            "shop_id": resolved_id,
             "phone": detail.phone,
             "address": detail.address or "页面未显示",
             "source": detail.detail_url,
@@ -259,16 +257,16 @@ class DianpingPlugin(Star):
 
     @filter.command("点评电话")
     async def dianping_phone_command(self, event: AstrMessageEvent):
-        """查询最近推荐店铺的电话。格式：/点评电话 店名或shop_id"""
+        """查询最近推荐店铺的电话。格式：/点评电话 完整店名"""
         text = str(getattr(event, "message_str", "") or "")
         body = re.sub(r"^/?点评电话\s*", "", text, count=1).strip()
         if not body:
-            yield event.plain_result("用法：/点评电话 店名或推荐结果中的 shop_id")
+            yield event.plain_result("用法：/点评电话 推荐结果中的完整店名")
             return
         is_id = bool(re.fullmatch(r"[A-Za-z0-9_-]{8,32}", body))
         resolved_id, resolved_name = self._resolve_recent(event, body if is_id else "", "" if is_id else body)
         if not resolved_id:
-            yield event.plain_result("无法唯一确定店铺，请使用推荐结果中的 shop_id 再试。")
+            yield event.plain_result("无法唯一确定店铺，请输入推荐结果中的完整店名再试。")
             return
         try:
             detail = await self.client.get_detail(resolved_id, fallback_name=resolved_name, include_phone=True)

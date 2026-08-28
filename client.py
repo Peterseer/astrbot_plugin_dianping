@@ -14,7 +14,7 @@ import aiohttp
 from bs4 import BeautifulSoup
 
 from .city_ids import resolve_city_id
-from .errors import DianpingBlockedError, DianpingConfigError, DianpingParseError
+from .errors import DianpingBlockedError, DianpingConfigError, DianpingError, DianpingParseError
 from .font_decoder import DianpingFontDecoder
 from .models import Dish, Restaurant
 from .parser import clean_text, parse_detail_page, parse_search_page
@@ -95,7 +95,7 @@ class DianpingClient:
                     ) as response:
                         body = await response.read()
                         self._last_request_at = time.monotonic()
-                        text = body.decode("utf-8", errors="ignore")
+                        text = self._decode_text(body)
                         if response.status in (403, 406, 418, 429) or any(
                             marker in text or marker in str(response.url) for marker in self.VERIFY_MARKERS
                         ):
@@ -115,7 +115,17 @@ class DianpingClient:
         raise DianpingParseError(f"访问大众点评失败：{last_error}")
 
     async def _get_text(self, url: str, *, referer: str = "https://www.dianping.com/") -> str:
-        return (await self._request(url, referer=referer)).decode("utf-8", errors="ignore")
+        return self._decode_text(await self._request(url, referer=referer))
+
+    @staticmethod
+    def _decode_text(body: bytes) -> str:
+        """Dianping mixes UTF-8 and legacy GBK pages (notably photo albums)."""
+        for encoding in ("utf-8-sig", "gb18030"):
+            try:
+                return body.decode(encoding)
+            except UnicodeDecodeError:
+                continue
+        return body.decode("utf-8", errors="replace")
 
     async def search(
         self,
@@ -167,27 +177,59 @@ class DianpingClient:
         raw_html = await self._get_text(url)
         html = await self.decoder.decode_html(raw_html, self._request)
         detail = parse_detail_page(html, shop_id, fallback_name)
-        if include_phone and self.uuid and self.tcv:
-            api_phone = await self._get_phone_from_api(shop_id, url)
-            if api_phone:
-                detail.phone = api_phone
+        hidden: dict[str, str] = {}
+        if self.uuid and self.tcv and (include_phone or self._address_incomplete(detail.address)):
+            try:
+                hidden = await self._get_hidden_info_from_api(shop_id, url)
+            except DianpingError:
+                hidden = {}
+            if hidden.get("address"):
+                detail.address = hidden["address"]
+            if include_phone and hidden.get("phone"):
+                detail.phone = hidden["phone"]
+        if self._address_incomplete(detail.address):
+            try:
+                album_detail = await self.get_album_detail(shop_id, fallback_name=detail.name or fallback_name)
+            except DianpingError:
+                album_detail = None
+            if album_detail is not None:
+                if album_detail.address:
+                    detail.address = album_detail.address
+                if album_detail.dishes and not detail.dishes:
+                    detail.dishes = album_detail.dishes
         return detail
 
-    async def enrich_dishes(self, items: list[Restaurant], *, limit: int = 3) -> None:
-        """Best-effort detail fetch for missing dish names/prices; failures keep search data."""
-        for item in items[: max(0, limit)]:
-            if item.dishes and any(dish.price for dish in item.dishes):
+    async def get_album_detail(self, shop_id: str, *, fallback_name: str = "") -> Restaurant:
+        url = f"https://www.dianping.com/shop/{quote(shop_id)}/photos/album"
+        raw_html = await self._get_text(url)
+        html = await self.decoder.decode_html(raw_html, self._request)
+        detail = parse_detail_page(html, shop_id, fallback_name)
+        detail.detail_url = f"https://www.dianping.com/shop/{shop_id}"
+        return detail
+
+    async def enrich_results(self, items: list[Restaurant], *, dish_limit: int = 3) -> None:
+        """Fill every missing address and enrich dishes for the configured leading items."""
+        dish_limit = max(0, dish_limit)
+        for index, item in enumerate(items):
+            needs_address = self._address_incomplete(item.address)
+            needs_dishes = index < dish_limit and not (
+                item.dishes and any(dish.price for dish in item.dishes)
+            )
+            if not needs_address and not needs_dishes:
                 continue
             try:
-                detail = await self.get_detail(item.shop_id, fallback_name=item.name)
+                if needs_dishes:
+                    detail = await self.get_detail(item.shop_id, fallback_name=item.name)
+                else:
+                    detail = await self.get_album_detail(item.shop_id, fallback_name=item.name)
             except Exception:
                 continue
-            if detail.address and not item.address:
+            if detail.address and needs_address:
                 item.address = detail.address
             if detail.dishes:
                 item.dishes = self._merge_dishes(item.dishes, detail.dishes)
 
-    async def _get_phone_from_api(self, shop_id: str, origin_url: str) -> str:
+    async def _get_hidden_info_from_api(self, shop_id: str, origin_url: str) -> dict[str, str]:
         token = self._token(origin_url)
         params = {
             "shopId": shop_id,
@@ -202,14 +244,27 @@ class DianpingClient:
         query = "&".join(f"{quote(str(key))}={quote(str(value), safe='')}" for key, value in params.items())
         url = f"https://www.dianping.com/ajax/json/shopDynamic/basicHideInfo?{query}"
         try:
-            payload: dict[str, Any] = json.loads((await self._request(url, referer=origin_url)).decode("utf-8"))
+            payload: dict[str, Any] = json.loads(
+                self._decode_text(await self._request(url, referer=origin_url))
+            )
         except (json.JSONDecodeError, DianpingParseError):
-            return ""
+            return {}
         if payload.get("code") != 200:
-            return ""
+            return {}
         info = (payload.get("msg") or {}).get("shopInfo") or {}
         values = [self.decoder.decode_fragment(str(info.get(key) or "")) for key in ("phoneNo", "phoneNo2")]
-        return "、".join(value for value in values if value)
+        address_parts = [
+            self.decoder.decode_fragment(str(info.get(key) or ""))
+            for key in ("address", "crossRoad")
+        ]
+        return {
+            "phone": "、".join(value for value in values if value),
+            "address": " ".join(value for value in address_parts if value),
+        }
+
+    @staticmethod
+    def _address_incomplete(address: str) -> bool:
+        return not clean_text(address) or "***" in address or "APP内查看" in address
 
     @staticmethod
     def _token(shop_url: str) -> str:
@@ -278,4 +333,3 @@ class DianpingClient:
             source_rank=item.source_rank,
             rank_score=item.rank_score,
         )
-
